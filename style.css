@@ -1,0 +1,97 @@
+.swipe-roulette {
+    border: 1px solid var(--SmartThemeBorderColor, var(--SmartThemeBodyColor));
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor, var(--SmartThemeBodyColor)) 22%, transparent);
+    color: var(--SmartThemeBodyColor);
+    padding: 10px;
+    margin-bottom: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.swipe-roulette__header {
+    font-weight: 700;
+    color: var(--SmartThemeEmColor, var(--SmartThemeBodyColor));
+}
+
+.swipe-roulette__toggle {
+    align-items: center;
+}
+
+.swipe-roulette__field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.swipe-roulette__label {
+    font-size: 0.95em;
+}
+
+.swipe-roulette__hint {
+    font-size: 0.85em;
+    opacity: 0.85;
+}
+
+.swipe-roulette__state {
+    font-size: 0.9em;
+    color: var(--SmartThemeQuoteColor, var(--SmartThemeBodyColor));
+}
+
+.swipe-roulette__state--ok {
+    color: var(--SmartThemeBodyColor);
+}
+
+.swipe-roulette__profiles {
+    max-height: 170px;
+    overflow-y: auto;
+    border: 1px solid var(--SmartThemeBorderColor, var(--SmartThemeBodyColor));
+    border-radius: 6px;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.swipe-roulette__profile-item {
+    align-items: center;
+    min-height: 24px;
+}
+
+.swipe-roulette__profile-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.swipe-roulette__profile-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.swipe-roulette__weight-input {
+    width: 52px;
+    text-align: center;
+    font-size: 0.85em;
+}
+
+.swipe-roulette__spin-section {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.swipe-roulette__spin-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.swipe-roulette__spin-result {
+    font-size: 0.85em;
+    opacity: 0.9;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

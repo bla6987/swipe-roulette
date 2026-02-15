@@ -1,0 +1,10 @@
+{
+    "display_name": "Swipe Roulette",
+    "loading_order": 20,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Anonymous",
+    "version": "1.0.0"
+}
