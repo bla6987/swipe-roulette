@@ -71,10 +71,29 @@
     white-space: nowrap;
 }
 
-.swipe-roulette__weight-input {
-    width: 52px;
-    text-align: center;
-    font-size: 0.85em;
+.swipe-roulette__weight-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    max-width: 140px;
+    flex-shrink: 0;
+}
+
+.swipe-roulette__weight-slider {
+    flex: 1;
+    min-width: 0;
+    cursor: pointer;
+    accent-color: var(--SmartThemeQuoteColor, var(--SmartThemeBodyColor));
+}
+
+.swipe-roulette__weight-pct {
+    width: 32px;
+    min-width: 32px;
+    text-align: right;
+    font-size: 0.8em;
+    opacity: 0.85;
+    flex-shrink: 0;
 }
 
 .swipe-roulette__spin-section {

@@ -317,12 +317,29 @@
     function normalizeWeight(value) {
         const n = Math.floor(Number(value));
         if (!Number.isFinite(n) || n < 1) return 1;
-        return Math.min(n, 999);
+        return Math.min(n, 100);
     }
 
     function getWeightForProfileId(profileId) {
         const settings = getSettings();
         return normalizeWeight(settings.profileWeights[profileId]);
+    }
+
+    function updateAllPercentageDisplays(container) {
+        const settings = getSettings();
+        const selectedIds = new Set(settings.profileIds);
+        let total = 0;
+        for (const id of selectedIds) total += getWeightForProfileId(id);
+
+        const pctSpans = container.querySelectorAll('.swipe-roulette__weight-pct');
+        for (const span of pctSpans) {
+            const profileId = span.dataset.profileId;
+            if (!profileId || !selectedIds.has(profileId) || total === 0) {
+                span.textContent = '';
+            } else {
+                span.textContent = Math.round(getWeightForProfileId(profileId) / total * 100) + '%';
+            }
+        }
     }
 
     function weightedRandomDraw(candidates, getWeight) {
@@ -376,7 +393,7 @@
                 <div id="swipe_roulette_profiles_state" class="swipe-roulette__state"></div>
                 <div id="swipe_roulette_profiles" class="swipe-roulette__profiles"></div>
                 <div class="swipe-roulette__hint">
-                    Higher weight = higher chance of being selected. Default is 1.
+                    Drag sliders to adjust selection probability.
                 </div>
                 <div class="swipe-roulette__spin-section">
                     <button id="swipe_roulette_spin" class="menu_button swipe-roulette__spin-btn" disabled>Spin</button>
@@ -471,6 +488,9 @@
                 s.profileIds = [...set];
                 saveSettings();
 
+                weightControls.style.display = checkbox.checked ? '' : 'none';
+                updateAllPercentageDisplays(container);
+
                 const spinBtn = uiRoot?.querySelector('#swipe_roulette_spin');
                 if (spinBtn) spinBtn.disabled = getSpinCandidates().length === 0;
             });
@@ -482,28 +502,39 @@
             label.appendChild(checkbox);
             label.appendChild(text);
 
-            const weightInput = document.createElement('input');
-            weightInput.type = 'number';
-            weightInput.min = '1';
-            weightInput.max = '999';
-            weightInput.step = '1';
-            weightInput.className = 'text_pole swipe-roulette__weight-input';
-            weightInput.value = String(getWeightForProfileId(profile.id));
-            weightInput.addEventListener('input', () => {
+            const weightControls = document.createElement('div');
+            weightControls.className = 'swipe-roulette__weight-controls';
+            weightControls.style.display = selectedIds.has(profile.id) ? '' : 'none';
+
+            const weightSlider = document.createElement('input');
+            weightSlider.type = 'range';
+            weightSlider.min = '1';
+            weightSlider.max = '100';
+            weightSlider.className = 'swipe-roulette__weight-slider';
+            weightSlider.value = String(getWeightForProfileId(profile.id));
+            weightSlider.addEventListener('input', () => {
                 const s = ensureSettings();
                 if (!s) return;
 
-                s.profileWeights[profile.id] = normalizeWeight(weightInput.value);
-                weightInput.value = String(s.profileWeights[profile.id]);
+                s.profileWeights[profile.id] = normalizeWeight(weightSlider.value);
                 saveSettings();
+                updateAllPercentageDisplays(container);
             });
 
+            const weightPct = document.createElement('span');
+            weightPct.className = 'swipe-roulette__weight-pct';
+            weightPct.dataset.profileId = profile.id;
+
+            weightControls.appendChild(weightSlider);
+            weightControls.appendChild(weightPct);
+
             row.appendChild(label);
-            row.appendChild(weightInput);
+            row.appendChild(weightControls);
             fragment.appendChild(row);
         }
 
         container.appendChild(fragment);
+        updateAllPercentageDisplays(container);
     }
 
     function refreshSettingsUi() {
