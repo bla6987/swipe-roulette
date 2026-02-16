@@ -315,17 +315,17 @@
         dismissRotationToast();
         if (!sticky) {
             toastr.info(
-                `<i class="fa-solid fa-dice"></i> ${profileName}`,
+                profileName,
                 'Swipe Roulette',
-                { escapeHtml: false, timeOut: 3500, extendedTimeOut: 1000 },
+                { timeOut: 3500, extendedTimeOut: 1000 },
             );
             return;
         }
 
         activeRotationToast = toastr.info(
-            `<i class="fa-solid fa-dice"></i> ${profileName}`,
+            profileName,
             'Swipe Roulette',
-            { escapeHtml: false, timeOut: 0, extendedTimeOut: 0 },
+            { timeOut: 0, extendedTimeOut: 0 },
         );
     }
 
@@ -625,6 +625,9 @@
     async function spinNow() {
         if (spinInFlight) return;
         spinInFlight = true;
+
+        resetSwipeState();
+        resetNormalRoutingState();
 
         try {
             const candidates = getSpinCandidates();
