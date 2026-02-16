@@ -12,6 +12,7 @@
     let isRestoring = false;
     let rotationSeq = 0;
     let spinInFlight = false;
+    let activeRotationToast = null;
 
     let uiRoot = null;
 
@@ -47,6 +48,7 @@
         if (settings.spinLastProfileId !== null && typeof settings.spinLastProfileId !== 'string') {
             settings.spinLastProfileId = null;
         }
+        if (typeof settings.showNotifications !== 'boolean') settings.showNotifications = true;
 
         return settings;
     }
@@ -58,7 +60,7 @@
     }
 
     function getSettings() {
-        return ensureSettings() || { enabled: false, profileIds: [], defaultSwipeThreshold: 0, debug: false, mode: 'weighted_random', profileWeights: {}, spinLastProfileId: null };
+        return ensureSettings() || { enabled: false, profileIds: [], defaultSwipeThreshold: 0, debug: false, mode: 'weighted_random', profileWeights: {}, spinLastProfileId: null, showNotifications: true };
     }
 
     function isEnabled() {
@@ -109,6 +111,22 @@
 
     async function switchToNoProfile() {
         await switchProfileByName(PROFILE_NONE_SENTINEL);
+    }
+
+    function showRotationToast(profileName) {
+        if (!getSettings().showNotifications) return;
+        dismissRotationToast();
+        activeRotationToast = toastr.info(
+            `<i class="fa-solid fa-dice"></i> ${profileName}`,
+            'Swipe Roulette',
+            { escapeHtml: false, timeOut: 0, extendedTimeOut: 0 },
+        );
+    }
+
+    function dismissRotationToast() {
+        if (!activeRotationToast) return;
+        toastr.clear(activeRotationToast, { force: true });
+        activeRotationToast = null;
     }
 
     function getRotationCandidates() {
@@ -163,6 +181,7 @@
         swipeRotationActive = false;
         profileBeforeSwipe = null;
         isRestoring = false;
+        dismissRotationToast();
     }
 
     async function restoreProfile() {
@@ -182,6 +201,7 @@
                 await switchToNoProfile();
                 log('Restored to no profile');
             }
+            dismissRotationToast();
         } catch (error) {
             warn('Failed to restore profile after swipe generation', error);
         } finally {
@@ -240,6 +260,7 @@
         try {
             await switchProfileByName(target.name);
             swipeRotationActive = true;
+            showRotationToast(target.name);
             log('Switched profile for swipe generation', target.name);
         } catch (error) {
             warn('Failed to switch profile for swipe generation', error);
@@ -390,6 +411,10 @@
                 <div class="swipe-roulette__hint">
                     Number of swipe generations to keep on the current profile before rotation starts. 0 means rotate on the first swipe.
                 </div>
+                <label class="checkbox_label flexNoGap swipe-roulette__toggle">
+                    <input type="checkbox" id="swipe_roulette_show_notifications">
+                    <span>Show notification on profile switch</span>
+                </label>
                 <div id="swipe_roulette_profiles_state" class="swipe-roulette__state"></div>
                 <div id="swipe_roulette_profiles" class="swipe-roulette__profiles"></div>
                 <div class="swipe-roulette__hint">
@@ -432,6 +457,17 @@
 
                 settings.defaultSwipeThreshold = sanitizeThresholdInput(thresholdInput.value);
                 thresholdInput.value = String(settings.defaultSwipeThreshold);
+                saveSettings();
+            });
+        }
+
+        const notificationsInput = uiRoot.querySelector('#swipe_roulette_show_notifications');
+        if (notificationsInput) {
+            notificationsInput.addEventListener('change', () => {
+                const settings = ensureSettings();
+                if (!settings) return;
+
+                settings.showNotifications = notificationsInput.checked;
                 saveSettings();
             });
         }
@@ -548,8 +584,11 @@
         const profilesContainer = root.querySelector('#swipe_roulette_profiles');
         const stateEl = root.querySelector('#swipe_roulette_profiles_state');
 
+        const notificationsInput = root.querySelector('#swipe_roulette_show_notifications');
+
         if (enabledInput) enabledInput.checked = settings.enabled;
         if (thresholdInput) thresholdInput.value = String(getThreshold());
+        if (notificationsInput) notificationsInput.checked = settings.showNotifications;
         renderProfilesChecklist(profilesContainer, stateEl);
 
         const spinBtn = root.querySelector('#swipe_roulette_spin');
