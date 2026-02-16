@@ -297,11 +297,9 @@
         const settings = getSettings();
         const selectedIds = new Set(settings.profileIds);
         const profiles = getConnectionProfiles();
-        const activeId = getActiveProfileId();
 
         return profiles
             .filter(p => selectedIds.has(p.id))
-            .filter(p => p.id !== activeId)
             .sort((a, b) => a.name.localeCompare(b.name));
     }
 

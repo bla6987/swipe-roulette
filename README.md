@@ -43,7 +43,7 @@ Open the **Extensions** drawer and find **Swipe Roulette** in the settings panel
 
 ## Notes
 
-- The active profile at swipe time is excluded from rotation candidates.
+- The active profile is included in swipe rotation candidates if it is selected in the checklist, so weighted draw may keep the current profile.
 - If the original profile no longer exists when restoring, it restores to `"<None>"`.
 - If profile switching fails, the extension logs a warning and leaves current profile unchanged.
 - Manual connection changes between swipes reset the threshold counter and cancel any in-flight swipe rotation state.
