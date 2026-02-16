@@ -13,6 +13,7 @@
     let rotationSeq = 0;
     let spinInFlight = false;
     let activeRotationToast = null;
+    let expectedProfileId = null;
 
     let uiRoot = null;
 
@@ -196,9 +197,11 @@
         try {
             if (originalProfile) {
                 await switchProfileByName(originalProfile.name);
+                expectedProfileId = savedProfileId;
                 log('Restored profile', originalProfile.name);
             } else {
                 await switchToNoProfile();
+                expectedProfileId = null;
                 log('Restored to no profile');
             }
             dismissRotationToast();
@@ -233,6 +236,17 @@
 
         if (!isEnabled()) return;
 
+        const currentProfileId = getActiveProfileId();
+        if (currentProfileId !== expectedProfileId) {
+            log('Manual profile change detected', { expected: expectedProfileId, actual: currentProfileId });
+            expectedProfileId = currentProfileId;
+            defaultSwipesUsed = 0;
+            if (swipeRotationActive) {
+                resetSwipeState();
+            }
+            return;
+        }
+
         defaultSwipesUsed += 1;
         const threshold = getThreshold();
         if (defaultSwipesUsed <= threshold) {
@@ -260,6 +274,7 @@
         try {
             await switchProfileByName(target.name);
             swipeRotationActive = true;
+            expectedProfileId = target.id;
             showRotationToast(target.name);
             log('Switched profile for swipe generation', target.name);
         } catch (error) {
@@ -286,6 +301,7 @@
         await restoreProfile();
         resetSwipeCounters();
         resetSwipeState();
+        expectedProfileId = getActiveProfileId();
     }
 
     async function spinNow() {
@@ -304,6 +320,8 @@
             if (!target) return;
 
             await switchProfileByName(target.name);
+            expectedProfileId = target.id;
+            defaultSwipesUsed = 0;
 
             const settings = ensureSettings();
             if (settings) {
@@ -618,6 +636,7 @@
 
         ensureSettings();
         pruneStaleProfileSelections();
+        expectedProfileId = getActiveProfileId();
 
         registerEvent(eventSource, eventTypes, 'GENERATION_STARTED', onGenerationStarted);
         registerEvent(eventSource, eventTypes, 'MESSAGE_RECEIVED', onMessageReceived);
