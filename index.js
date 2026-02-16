@@ -736,45 +736,52 @@
         wrapper.id = `${EXTENSION_NAME}_container`;
         wrapper.className = 'extension_container';
         wrapper.innerHTML = `
-            <div class="swipe-roulette card">
-                <div class="swipe-roulette__header">Swipe Roulette</div>
-                <label class="checkbox_label flexNoGap swipe-roulette__toggle">
-                    <input type="checkbox" id="swipe_roulette_enabled">
-                    <span>Enable profile rotation on swipe generation</span>
-                </label>
-                <label class="swipe-roulette__field" for="swipe_roulette_threshold">
-                    <span class="swipe-roulette__label">Swipes before rotating</span>
-                    <input type="number" id="swipe_roulette_threshold" min="0" step="1" class="text_pole widthNatural">
-                </label>
-                <div class="swipe-roulette__hint">
-                    Number of swipe generations to keep on the current profile before rotation starts. 0 means rotate on the first swipe.
+            <div class="inline-drawer">
+                <div class="inline-drawer-toggle inline-drawer-header">
+                    <b>Swipe Roulette</b>
+                    <div class="fa-solid fa-circle-chevron-down inline-drawer-icon down"></div>
                 </div>
-                <label class="checkbox_label flexNoGap swipe-roulette__toggle">
-                    <input type="checkbox" id="swipe_roulette_normal_enabled">
-                    <span>Enable weighted routing for user messages</span>
-                </label>
-                <label class="swipe-roulette__field" id="swipe_roulette_normal_restore_field" for="swipe_roulette_normal_restore_mode">
-                    <span class="swipe-roulette__label">After user-message response</span>
-                    <select id="swipe_roulette_normal_restore_mode" class="text_pole swipe-roulette__select">
-                        <option value="keep">Keep selected profile active</option>
-                        <option value="restore">Restore previous profile</option>
-                    </select>
-                </label>
-                <div class="swipe-roulette__hint">
-                    User-message routing applies to normal sends only. Regenerate, continue, and impersonate stay unchanged.
-                </div>
-                <label class="checkbox_label flexNoGap swipe-roulette__toggle">
-                    <input type="checkbox" id="swipe_roulette_show_notifications">
-                    <span>Show notification on profile switch</span>
-                </label>
-                <div id="swipe_roulette_profiles_state" class="swipe-roulette__state"></div>
-                <div id="swipe_roulette_profiles" class="swipe-roulette__profiles"></div>
-                <div class="swipe-roulette__hint">
-                    Drag sliders to adjust selection probability used by swipes, user-message routing, and Spin.
-                </div>
-                <div class="swipe-roulette__spin-section">
-                    <button id="swipe_roulette_spin" class="menu_button swipe-roulette__spin-btn" disabled>Spin</button>
-                    <span id="swipe_roulette_spin_result" class="swipe-roulette__spin-result"></span>
+                <div class="inline-drawer-content">
+                    <div class="swipe-roulette">
+                        <label class="checkbox_label flexNoGap swipe-roulette__toggle">
+                            <input type="checkbox" id="swipe_roulette_enabled">
+                            <span>Enable profile rotation on swipe generation</span>
+                        </label>
+                        <label class="swipe-roulette__field" for="swipe_roulette_threshold">
+                            <span class="swipe-roulette__label">Swipes before rotating</span>
+                            <input type="number" id="swipe_roulette_threshold" min="0" step="1" class="text_pole widthNatural">
+                        </label>
+                        <div class="swipe-roulette__hint">
+                            Number of swipe generations to keep on the current profile before rotation starts. 0 means rotate on the first swipe.
+                        </div>
+                        <label class="checkbox_label flexNoGap swipe-roulette__toggle">
+                            <input type="checkbox" id="swipe_roulette_normal_enabled">
+                            <span>Enable weighted routing for user messages</span>
+                        </label>
+                        <label class="swipe-roulette__field" id="swipe_roulette_normal_restore_field" for="swipe_roulette_normal_restore_mode">
+                            <span class="swipe-roulette__label">After user-message response</span>
+                            <select id="swipe_roulette_normal_restore_mode" class="text_pole swipe-roulette__select">
+                                <option value="keep">Keep selected profile active</option>
+                                <option value="restore">Restore previous profile</option>
+                            </select>
+                        </label>
+                        <div class="swipe-roulette__hint">
+                            User-message routing applies to normal sends only. Regenerate, continue, and impersonate stay unchanged.
+                        </div>
+                        <label class="checkbox_label flexNoGap swipe-roulette__toggle">
+                            <input type="checkbox" id="swipe_roulette_show_notifications">
+                            <span>Show notification on profile switch</span>
+                        </label>
+                        <div id="swipe_roulette_profiles_state" class="swipe-roulette__state"></div>
+                        <div id="swipe_roulette_profiles" class="swipe-roulette__profiles"></div>
+                        <div class="swipe-roulette__hint">
+                            Drag sliders to adjust selection probability used by swipes, user-message routing, and Spin.
+                        </div>
+                        <div class="swipe-roulette__spin-section">
+                            <button id="swipe_roulette_spin" class="menu_button swipe-roulette__spin-btn" disabled>Spin</button>
+                            <span id="swipe_roulette_spin_result" class="swipe-roulette__spin-result"></span>
+                        </div>
+                    </div>
                 </div>
             </div>
         `;
@@ -788,6 +795,20 @@
 
     function bindUiEvents() {
         if (!uiRoot) return;
+
+        const drawerToggle = uiRoot.querySelector('.inline-drawer-toggle');
+        if (drawerToggle) {
+            drawerToggle.addEventListener('click', () => {
+                const icon = uiRoot.querySelector('.inline-drawer-icon');
+                const content = uiRoot.querySelector('.inline-drawer-content');
+                const isOpen = content.style.display === 'block';
+                content.style.display = isOpen ? 'none' : 'block';
+                icon.classList.toggle('fa-circle-chevron-down', isOpen);
+                icon.classList.toggle('down', isOpen);
+                icon.classList.toggle('fa-circle-chevron-up', !isOpen);
+                icon.classList.toggle('up', !isOpen);
+            });
+        }
 
         const enabledInput = uiRoot.querySelector('#swipe_roulette_enabled');
         const normalRoutingInput = uiRoot.querySelector('#swipe_roulette_normal_enabled');

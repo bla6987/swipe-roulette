@@ -1,18 +1,7 @@
 .swipe-roulette {
-    border: 1px solid var(--SmartThemeBorderColor, var(--SmartThemeBodyColor));
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--SmartThemeBlurTintColor, var(--SmartThemeBodyColor)) 22%, transparent);
-    color: var(--SmartThemeBodyColor);
-    padding: 10px;
-    margin-bottom: 10px;
     display: flex;
     flex-direction: column;
     gap: 8px;
-}
-
-.swipe-roulette__header {
-    font-weight: 700;
-    color: var(--SmartThemeEmColor, var(--SmartThemeBodyColor));
 }
 
 .swipe-roulette__toggle {
