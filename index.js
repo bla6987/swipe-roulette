@@ -5,6 +5,53 @@
     const PROFILE_NONE_SENTINEL = '<None>';
     const MAX_BOOT_RETRIES = 100;
     const BOOT_RETRY_MS = 100;
+    const CHAT_COMPLETION_SIGNATURE_KEYS = [
+        'chat_completion_source',
+        'openai_model',
+        'azure_openai_model',
+        'openrouter_model',
+        'claude_model',
+        'mistralai_model',
+        'custom_model',
+        'cohere_model',
+        'perplexity_model',
+        'groq_model',
+        'siliconflow_model',
+        'electronhub_model',
+        'nanogpt_model',
+        'deepseek_model',
+        'xai_model',
+        'aimlapi_model',
+        'moonshot_model',
+        'fireworks_model',
+        'cometapi_model',
+        'zai_model',
+        'chutes_model',
+        'ai21_model',
+        'makersuite_model',
+        'vertexai_model',
+        'preset_settings_openai',
+        'custom_url',
+        'azure_base_url',
+    ];
+    const TEXT_COMPLETION_SIGNATURE_KEYS = [
+        'type',
+        'preset',
+        'mancer_model',
+        'togetherai_model',
+        'infermaticai_model',
+        'ollama_model',
+        'openrouter_model',
+        'vllm_model',
+        'aphrodite_model',
+        'dreamgen_model',
+        'tabby_model',
+        'llamacpp_model',
+        'custom_model',
+        'featherless_model',
+        'generic_model',
+        'api_server_textgenerationwebui',
+    ];
 
     let defaultSwipesUsed = 0;
     let swipeRotationActive = false;
@@ -14,6 +61,8 @@
     let spinInFlight = false;
     let activeRotationToast = null;
     let expectedProfileId = null;
+    let connectionSignature = null;
+    let internalProfileSwitchDepth = 0;
 
     let uiRoot = null;
 
@@ -96,6 +145,114 @@
         return typeof selected === 'string' && selected.length > 0 ? selected : null;
     }
 
+    function isInternalProfileSwitchInProgress() {
+        return internalProfileSwitchDepth > 0;
+    }
+
+    function stableStringify(value, seen = new WeakSet()) {
+        if (value === null || typeof value !== 'object') {
+            return JSON.stringify(value);
+        }
+
+        if (seen.has(value)) {
+            return JSON.stringify('[Circular]');
+        }
+        seen.add(value);
+
+        if (Array.isArray(value)) {
+            const out = '[' + value.map(item => stableStringify(item, seen)).join(',') + ']';
+            seen.delete(value);
+            return out;
+        }
+
+        const keys = Object.keys(value).sort();
+        const props = [];
+        for (const key of keys) {
+            const item = value[key];
+            if (typeof item === 'undefined' || typeof item === 'function') continue;
+            props.push(`${JSON.stringify(key)}:${stableStringify(item, seen)}`);
+        }
+
+        seen.delete(value);
+        return '{' + props.join(',') + '}';
+    }
+
+    function pickKeys(source, keys) {
+        if (!source || typeof source !== 'object') return {};
+        const out = {};
+        for (const key of keys) {
+            if (typeof source[key] !== 'undefined') {
+                out[key] = source[key];
+            }
+        }
+        return out;
+    }
+
+    function getActiveProfileSnapshot(activeProfileId) {
+        if (!activeProfileId) return null;
+        const ctx = getContext();
+        const profiles = ctx?.extensionSettings?.connectionManager?.profiles;
+        if (!Array.isArray(profiles)) return null;
+        const profile = profiles.find(p => p && typeof p === 'object' && p.id === activeProfileId);
+        return profile || null;
+    }
+
+    function computeConnectionSignature() {
+        const ctx = getContext();
+        const activeProfileId = getActiveProfileId();
+
+        const snapshot = {
+            mainApi: ctx?.mainApi || null,
+            selectedProfileId: activeProfileId,
+            selectedProfile: getActiveProfileSnapshot(activeProfileId),
+            chatCompletion: pickKeys(ctx?.chatCompletionSettings, CHAT_COMPLETION_SIGNATURE_KEYS),
+            textCompletion: pickKeys(ctx?.textCompletionSettings, TEXT_COMPLETION_SIGNATURE_KEYS),
+        };
+
+        return stableStringify(snapshot);
+    }
+
+    function captureConnectionContext(reason = 'capture') {
+        expectedProfileId = getActiveProfileId();
+        connectionSignature = computeConnectionSignature();
+        log('Captured connection context', { reason, expectedProfileId });
+    }
+
+    function syncConnectionContext(reason, options = {}) {
+        const { resetCounter = true, cancelActiveRotation = true } = options;
+        if (isInternalProfileSwitchInProgress()) {
+            log('Skipping connection sync during internal profile switch', { reason });
+            return false;
+        }
+
+        const currentProfileId = getActiveProfileId();
+        const nextSignature = computeConnectionSignature();
+        const profileChanged = currentProfileId !== expectedProfileId;
+        const signatureChanged = nextSignature !== connectionSignature;
+        if (!profileChanged && !signatureChanged) return false;
+
+        log('Connection context changed', {
+            reason,
+            expectedProfileId,
+            currentProfileId,
+            profileChanged,
+            signatureChanged,
+        });
+
+        expectedProfileId = currentProfileId;
+        connectionSignature = nextSignature;
+
+        if (resetCounter) {
+            defaultSwipesUsed = 0;
+        }
+
+        if (cancelActiveRotation && swipeRotationActive) {
+            resetSwipeState();
+        }
+
+        return true;
+    }
+
     function quoteSlashArg(value) {
         return JSON.stringify(String(value));
     }
@@ -110,8 +267,14 @@
         await ctx.executeSlashCommandsWithOptions(command);
     }
 
-    async function switchToNoProfile() {
-        await switchProfileByName(PROFILE_NONE_SENTINEL);
+    async function performInternalProfileSwitch(profileName, reason) {
+        internalProfileSwitchDepth += 1;
+        try {
+            await switchProfileByName(profileName);
+            captureConnectionContext(reason);
+        } finally {
+            internalProfileSwitchDepth = Math.max(0, internalProfileSwitchDepth - 1);
+        }
     }
 
     function showRotationToast(profileName) {
@@ -196,12 +359,10 @@
 
         try {
             if (originalProfile) {
-                await switchProfileByName(originalProfile.name);
-                expectedProfileId = savedProfileId;
+                await performInternalProfileSwitch(originalProfile.name, 'restore_profile');
                 log('Restored profile', originalProfile.name);
             } else {
-                await switchToNoProfile();
-                expectedProfileId = null;
+                await performInternalProfileSwitch(PROFILE_NONE_SENTINEL, 'restore_none');
                 log('Restored to no profile');
             }
             dismissRotationToast();
@@ -221,6 +382,14 @@
     async function onGenerationStarted(type, _params, dryRun) {
         if (dryRun === true) return;
 
+        const contextChanged = syncConnectionContext(`generation_started:${type}`, {
+            resetCounter: type === 'swipe',
+            cancelActiveRotation: true,
+        });
+        if (type === 'swipe' && contextChanged) {
+            return;
+        }
+
         // Restore stale rotation from a previous generation that never completed
         if (swipeRotationActive && !isRestoring && type !== 'quiet') {
             log('Recovering stale rotation before', type, 'generation');
@@ -235,17 +404,6 @@
         }
 
         if (!isEnabled()) return;
-
-        const currentProfileId = getActiveProfileId();
-        if (currentProfileId !== expectedProfileId) {
-            log('Manual profile change detected', { expected: expectedProfileId, actual: currentProfileId });
-            expectedProfileId = currentProfileId;
-            defaultSwipesUsed = 0;
-            if (swipeRotationActive) {
-                resetSwipeState();
-            }
-            return;
-        }
 
         defaultSwipesUsed += 1;
         const threshold = getThreshold();
@@ -277,9 +435,8 @@
         }
 
         try {
-            await switchProfileByName(target.name);
+            await performInternalProfileSwitch(target.name, 'swipe_rotation_switch');
             swipeRotationActive = true;
-            expectedProfileId = target.id;
             showRotationToast(target.name);
             log('Switched profile for swipe generation', target.name);
         } catch (error) {
@@ -306,7 +463,7 @@
         await restoreProfile();
         resetSwipeCounters();
         resetSwipeState();
-        expectedProfileId = getActiveProfileId();
+        captureConnectionContext('chat_changed');
     }
 
     async function spinNow() {
@@ -324,8 +481,7 @@
             const target = weightedRandomDraw(candidates, (p) => getWeightForProfileId(p.id));
             if (!target) return;
 
-            await switchProfileByName(target.name);
-            expectedProfileId = target.id;
+            await performInternalProfileSwitch(target.name, 'spin_switch');
             defaultSwipesUsed = 0;
 
             const settings = ensureSettings();
@@ -349,7 +505,12 @@
 
     function onConnectionProfileChanged() {
         pruneStaleProfileSelections();
+        syncConnectionContext('event:CONNECTION_PROFILE_CATALOG');
         refreshSettingsUi();
+    }
+
+    function onConnectionContextSignal(eventKey) {
+        syncConnectionContext(`event:${eventKey}`);
     }
 
     function sanitizeThresholdInput(value) {
@@ -641,7 +802,7 @@
 
         ensureSettings();
         pruneStaleProfileSelections();
-        expectedProfileId = getActiveProfileId();
+        captureConnectionContext('init');
 
         registerEvent(eventSource, eventTypes, 'GENERATION_STARTED', onGenerationStarted);
         registerEvent(eventSource, eventTypes, 'MESSAGE_RECEIVED', onMessageReceived);
@@ -652,6 +813,13 @@
         registerEvent(eventSource, eventTypes, 'CONNECTION_PROFILE_CREATED', onConnectionProfileChanged);
         registerEvent(eventSource, eventTypes, 'CONNECTION_PROFILE_UPDATED', onConnectionProfileChanged);
         registerEvent(eventSource, eventTypes, 'CONNECTION_PROFILE_DELETED', onConnectionProfileChanged);
+        registerEvent(eventSource, eventTypes, 'CONNECTION_PROFILE_LOADED', () => onConnectionContextSignal('CONNECTION_PROFILE_LOADED'));
+        registerEvent(eventSource, eventTypes, 'MAIN_API_CHANGED', () => onConnectionContextSignal('MAIN_API_CHANGED'));
+        registerEvent(eventSource, eventTypes, 'CHATCOMPLETION_SOURCE_CHANGED', () => onConnectionContextSignal('CHATCOMPLETION_SOURCE_CHANGED'));
+        registerEvent(eventSource, eventTypes, 'CHATCOMPLETION_MODEL_CHANGED', () => onConnectionContextSignal('CHATCOMPLETION_MODEL_CHANGED'));
+        registerEvent(eventSource, eventTypes, 'PRESET_CHANGED', () => onConnectionContextSignal('PRESET_CHANGED'));
+        registerEvent(eventSource, eventTypes, 'OAI_PRESET_CHANGED_AFTER', () => onConnectionContextSignal('OAI_PRESET_CHANGED_AFTER'));
+        registerEvent(eventSource, eventTypes, 'SETTINGS_UPDATED', () => onConnectionContextSignal('SETTINGS_UPDATED'));
 
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', refreshSettingsUi, { once: true });

@@ -7,7 +7,8 @@ A standalone SillyTavern extension that rotates Connection Manager profiles on s
 - Rotates profiles only for `type === 'swipe'` generations
 - Restores original profile on completion (`MESSAGE_RECEIVED`) or abort (`GENERATION_STOPPED`)
 - Configurable threshold (`Swipes before rotating`)
-- Profile checklist sourced from Connection Manager and refreshed on profile create/update/delete
+- Detects manual connection context changes (profile/source/model/preset/API) and resets swipe counter baseline
+- Profile checklist sourced from Connection Manager and refreshed on profile lifecycle changes
 - Safe no-op behavior when no valid rotation candidates exist
 
 ## Install
@@ -45,6 +46,7 @@ Open the **Extensions** drawer and find **Swipe Roulette** in the settings panel
 - The active profile at swipe time is excluded from rotation candidates.
 - If the original profile no longer exists when restoring, it restores to `"<None>"`.
 - If profile switching fails, the extension logs a warning and leaves current profile unchanged.
+- Manual connection changes between swipes reset the threshold counter and cancel any in-flight swipe rotation state.
 
 ## Debug
 
