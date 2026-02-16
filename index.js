@@ -316,8 +316,8 @@
 
     function normalizeWeight(value) {
         const n = Math.floor(Number(value));
-        if (!Number.isFinite(n) || n < 1) return 1;
-        return Math.min(n, 100);
+        if (!Number.isFinite(n) || n < 1) return 5;
+        return Math.min(n, 10);
     }
 
     function getWeightForProfileId(profileId) {
@@ -509,7 +509,7 @@
             const weightSlider = document.createElement('input');
             weightSlider.type = 'range';
             weightSlider.min = '1';
-            weightSlider.max = '100';
+            weightSlider.max = '10';
             weightSlider.className = 'swipe-roulette__weight-slider';
             weightSlider.value = String(getWeightForProfileId(profile.id));
             weightSlider.addEventListener('input', () => {
