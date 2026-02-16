@@ -56,8 +56,12 @@
     let defaultSwipesUsed = 0;
     let swipeRotationActive = false;
     let profileBeforeSwipe = null;
-    let isRestoring = false;
+    let isRestoringSwipe = false;
     let rotationSeq = 0;
+    let normalRoutingActive = false;
+    let profileBeforeNormalRouting = null;
+    let isRestoringNormalRouting = false;
+    let normalRoutingSeq = 0;
     let spinInFlight = false;
     let activeRotationToast = null;
     let expectedProfileId = null;
@@ -99,6 +103,10 @@
             settings.spinLastProfileId = null;
         }
         if (typeof settings.showNotifications !== 'boolean') settings.showNotifications = true;
+        if (typeof settings.normalMessageRoutingEnabled !== 'boolean') settings.normalMessageRoutingEnabled = false;
+        if (settings.normalMessageRestoreMode !== 'restore' && settings.normalMessageRestoreMode !== 'keep') {
+            settings.normalMessageRestoreMode = 'keep';
+        }
 
         return settings;
     }
@@ -110,17 +118,37 @@
     }
 
     function getSettings() {
-        return ensureSettings() || { enabled: false, profileIds: [], defaultSwipeThreshold: 0, debug: false, mode: 'weighted_random', profileWeights: {}, spinLastProfileId: null, showNotifications: true };
+        return ensureSettings() || {
+            enabled: false,
+            profileIds: [],
+            defaultSwipeThreshold: 0,
+            debug: false,
+            mode: 'weighted_random',
+            profileWeights: {},
+            spinLastProfileId: null,
+            showNotifications: true,
+            normalMessageRoutingEnabled: false,
+            normalMessageRestoreMode: 'keep',
+        };
     }
 
     function isEnabled() {
         return Boolean(getSettings().enabled);
     }
 
+    function isNormalMessageRoutingEnabled() {
+        return Boolean(getSettings().normalMessageRoutingEnabled);
+    }
+
     function getThreshold() {
         const value = Number(getSettings().defaultSwipeThreshold);
         if (!Number.isFinite(value)) return 0;
         return Math.max(0, Math.floor(value));
+    }
+
+    function getNormalRestoreMode() {
+        const mode = getSettings().normalMessageRestoreMode;
+        return mode === 'restore' ? 'restore' : 'keep';
     }
 
     function log(...args) {
@@ -246,8 +274,13 @@
             defaultSwipesUsed = 0;
         }
 
-        if (cancelActiveRotation && swipeRotationActive) {
-            resetSwipeState();
+        if (cancelActiveRotation) {
+            if (swipeRotationActive) {
+                resetSwipeState();
+            }
+            if (normalRoutingActive) {
+                resetNormalRoutingState();
+            }
         }
 
         return true;
@@ -277,9 +310,18 @@
         }
     }
 
-    function showRotationToast(profileName) {
+    function showRotationToast(profileName, { sticky = true } = {}) {
         if (!getSettings().showNotifications) return;
         dismissRotationToast();
+        if (!sticky) {
+            toastr.info(
+                `<i class="fa-solid fa-dice"></i> ${profileName}`,
+                'Swipe Roulette',
+                { escapeHtml: false, timeOut: 3500, extendedTimeOut: 1000 },
+            );
+            return;
+        }
+
         activeRotationToast = toastr.info(
             `<i class="fa-solid fa-dice"></i> ${profileName}`,
             'Swipe Roulette',
@@ -293,14 +335,20 @@
         activeRotationToast = null;
     }
 
-    function getRotationCandidates() {
+    function getWeightedCandidates({ excludeActiveProfile = false } = {}) {
         const settings = getSettings();
         const selectedIds = new Set(settings.profileIds);
         const profiles = getConnectionProfiles();
+        const activeProfileId = getActiveProfileId();
 
         return profiles
+            .filter(p => !excludeActiveProfile || p.id !== activeProfileId)
             .filter(p => selectedIds.has(p.id))
             .sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    function getRotationCandidates() {
+        return getWeightedCandidates({ excludeActiveProfile: false });
     }
 
     function pruneStaleProfileSelections() {
@@ -342,13 +390,21 @@
         rotationSeq++;
         swipeRotationActive = false;
         profileBeforeSwipe = null;
-        isRestoring = false;
+        isRestoringSwipe = false;
         dismissRotationToast();
     }
 
-    async function restoreProfile() {
-        if (!swipeRotationActive || isRestoring) return;
-        isRestoring = true;
+    function resetNormalRoutingState() {
+        normalRoutingSeq++;
+        normalRoutingActive = false;
+        profileBeforeNormalRouting = null;
+        isRestoringNormalRouting = false;
+        dismissRotationToast();
+    }
+
+    async function restoreSwipeProfile() {
+        if (!swipeRotationActive || isRestoringSwipe) return;
+        isRestoringSwipe = true;
 
         const seq = rotationSeq;
         const savedProfileId = profileBeforeSwipe;
@@ -373,7 +429,38 @@
             } else {
                 log('Skipping stale restore cleanup', { seq, current: rotationSeq });
             }
-            isRestoring = false;
+            isRestoringSwipe = false;
+        }
+    }
+
+    async function restoreNormalRoutingProfile() {
+        if (!normalRoutingActive || isRestoringNormalRouting) return;
+        isRestoringNormalRouting = true;
+
+        const seq = normalRoutingSeq;
+        const savedProfileId = profileBeforeNormalRouting;
+        const profiles = getConnectionProfiles();
+        const originalProfile = profiles.find(p => p.id === savedProfileId) || null;
+
+        try {
+            if (originalProfile) {
+                await performInternalProfileSwitch(originalProfile.name, 'restore_normal_profile');
+                log('Restored profile after normal message generation', originalProfile.name);
+            } else {
+                await performInternalProfileSwitch(PROFILE_NONE_SENTINEL, 'restore_normal_none');
+                log('Restored to no profile after normal message generation');
+            }
+            dismissRotationToast();
+        } catch (error) {
+            warn('Failed to restore profile after normal message generation', error);
+        } finally {
+            if (normalRoutingSeq === seq) {
+                normalRoutingActive = false;
+                profileBeforeNormalRouting = null;
+            } else {
+                log('Skipping stale normal restore cleanup', { seq, current: normalRoutingSeq });
+            }
+            isRestoringNormalRouting = false;
         }
     }
 
@@ -389,15 +476,76 @@
         }
 
         // Restore stale rotation from a previous generation that never completed
-        if (swipeRotationActive && !isRestoring && type !== 'quiet') {
+        if (swipeRotationActive && !isRestoringSwipe && type !== 'quiet') {
             log('Recovering stale rotation before', type, 'generation');
-            await restoreProfile();
+            await restoreSwipeProfile();
         }
 
-        if (type !== 'swipe') {
+        // Restore stale non-swipe temporary routing if a previous run never finished cleanly
+        if (normalRoutingActive && !isRestoringNormalRouting && type !== 'quiet') {
+            log('Recovering stale normal restore state before', type, 'generation');
+            await restoreNormalRoutingProfile();
+        }
+
+        if (type !== 'swipe' && type !== 'normal') {
             if (type !== 'quiet') {
                 defaultSwipesUsed = 0;
             }
+            return;
+        }
+
+        if (type === 'normal') {
+            defaultSwipesUsed = 0;
+
+            if (!isNormalMessageRoutingEnabled()) return;
+
+            const candidates = getRotationCandidates();
+            if (candidates.length === 0) {
+                log('No candidates available for normal message routing');
+                return;
+            }
+
+            const target = weightedRandomDraw(candidates, (p) => getWeightForProfileId(p.id));
+            if (!target) {
+                log('Weighted draw returned no target for normal message routing');
+                return;
+            }
+
+            const activeProfileId = getActiveProfileId();
+            if (target.id === activeProfileId) {
+                log('Selected profile already active for normal generation', target.name);
+                return;
+            }
+
+            const restoreAfter = getNormalRestoreMode() === 'restore';
+            if (restoreAfter) {
+                normalRoutingSeq++;
+                if (!normalRoutingActive) {
+                    profileBeforeNormalRouting = activeProfileId;
+                }
+            } else {
+                normalRoutingActive = false;
+                profileBeforeNormalRouting = null;
+                isRestoringNormalRouting = false;
+            }
+
+            try {
+                await performInternalProfileSwitch(target.name, 'normal_message_switch');
+                if (restoreAfter) {
+                    normalRoutingActive = true;
+                    showRotationToast(target.name, { sticky: true });
+                } else {
+                    showRotationToast(target.name, { sticky: false });
+                }
+                log('Switched profile for normal generation', { profile: target.name, restoreAfter });
+            } catch (error) {
+                warn('Failed to switch profile for normal generation', error);
+                if (restoreAfter) {
+                    normalRoutingActive = false;
+                    profileBeforeNormalRouting = null;
+                }
+            }
+
             return;
         }
 
@@ -435,7 +583,7 @@
         try {
             await performInternalProfileSwitch(target.name, 'swipe_rotation_switch');
             swipeRotationActive = true;
-            showRotationToast(target.name);
+            showRotationToast(target.name, { sticky: true });
             log('Switched profile for swipe generation', target.name);
         } catch (error) {
             warn('Failed to switch profile for swipe generation', error);
@@ -445,22 +593,32 @@
     }
 
     async function onMessageReceived(_messageId, type) {
-        if (type !== 'swipe') return;
-        await restoreProfile();
+        if (type === 'swipe') {
+            await restoreSwipeProfile();
+            return;
+        }
+
+        if (type === 'normal') {
+            await restoreNormalRoutingProfile();
+        }
     }
 
     async function onGenerationStopped() {
-        await restoreProfile();
+        await restoreSwipeProfile();
+        await restoreNormalRoutingProfile();
     }
 
     async function onGenerationEnded() {
-        await restoreProfile();
+        await restoreSwipeProfile();
+        await restoreNormalRoutingProfile();
     }
 
     async function onChatChanged() {
-        await restoreProfile();
+        await restoreSwipeProfile();
+        await restoreNormalRoutingProfile();
         resetSwipeCounters();
         resetSwipeState();
+        resetNormalRoutingState();
         captureConnectionContext('chat_changed');
     }
 
@@ -517,6 +675,10 @@
         return Math.max(0, Math.floor(n));
     }
 
+    function normalizeNormalRestoreMode(value) {
+        return value === 'restore' ? 'restore' : 'keep';
+    }
+
     function normalizeWeight(value) {
         const n = Math.floor(Number(value));
         if (!Number.isFinite(n) || n < 1) return 5;
@@ -561,13 +723,7 @@
     }
 
     function getSpinCandidates() {
-        const settings = getSettings();
-        const selectedIds = new Set(settings.profileIds);
-        const profiles = getConnectionProfiles();
-
-        return profiles
-            .filter(p => selectedIds.has(p.id))
-            .sort((a, b) => a.name.localeCompare(b.name));
+        return getWeightedCandidates({ excludeActiveProfile: false });
     }
 
     function ensureUiContainer() {
@@ -594,13 +750,27 @@
                     Number of swipe generations to keep on the current profile before rotation starts. 0 means rotate on the first swipe.
                 </div>
                 <label class="checkbox_label flexNoGap swipe-roulette__toggle">
+                    <input type="checkbox" id="swipe_roulette_normal_enabled">
+                    <span>Enable weighted routing for user messages</span>
+                </label>
+                <label class="swipe-roulette__field" id="swipe_roulette_normal_restore_field" for="swipe_roulette_normal_restore_mode">
+                    <span class="swipe-roulette__label">After user-message response</span>
+                    <select id="swipe_roulette_normal_restore_mode" class="text_pole swipe-roulette__select">
+                        <option value="keep">Keep selected profile active</option>
+                        <option value="restore">Restore previous profile</option>
+                    </select>
+                </label>
+                <div class="swipe-roulette__hint">
+                    User-message routing applies to normal sends only. Regenerate, continue, and impersonate stay unchanged.
+                </div>
+                <label class="checkbox_label flexNoGap swipe-roulette__toggle">
                     <input type="checkbox" id="swipe_roulette_show_notifications">
                     <span>Show notification on profile switch</span>
                 </label>
                 <div id="swipe_roulette_profiles_state" class="swipe-roulette__state"></div>
                 <div id="swipe_roulette_profiles" class="swipe-roulette__profiles"></div>
                 <div class="swipe-roulette__hint">
-                    Drag sliders to adjust selection probability.
+                    Drag sliders to adjust selection probability used by swipes, user-message routing, and Spin.
                 </div>
                 <div class="swipe-roulette__spin-section">
                     <button id="swipe_roulette_spin" class="menu_button swipe-roulette__spin-btn" disabled>Spin</button>
@@ -620,6 +790,8 @@
         if (!uiRoot) return;
 
         const enabledInput = uiRoot.querySelector('#swipe_roulette_enabled');
+        const normalRoutingInput = uiRoot.querySelector('#swipe_roulette_normal_enabled');
+        const normalRestoreModeInput = uiRoot.querySelector('#swipe_roulette_normal_restore_mode');
         const thresholdInput = uiRoot.querySelector('#swipe_roulette_threshold');
 
         if (enabledInput) {
@@ -628,6 +800,28 @@
                 if (!settings) return;
 
                 settings.enabled = enabledInput.checked;
+                saveSettings();
+            });
+        }
+
+        if (normalRoutingInput) {
+            normalRoutingInput.addEventListener('change', () => {
+                const settings = ensureSettings();
+                if (!settings) return;
+
+                settings.normalMessageRoutingEnabled = normalRoutingInput.checked;
+                saveSettings();
+                refreshNormalRestoreModeUi();
+            });
+        }
+
+        if (normalRestoreModeInput) {
+            normalRestoreModeInput.addEventListener('change', () => {
+                const settings = ensureSettings();
+                if (!settings) return;
+
+                settings.normalMessageRestoreMode = normalizeNormalRestoreMode(normalRestoreModeInput.value);
+                normalRestoreModeInput.value = settings.normalMessageRestoreMode;
                 saveSettings();
             });
         }
@@ -660,6 +854,18 @@
         }
     }
 
+    function refreshNormalRestoreModeUi() {
+        if (!uiRoot) return;
+        const normalRoutingInput = uiRoot.querySelector('#swipe_roulette_normal_enabled');
+        const restoreModeInput = uiRoot.querySelector('#swipe_roulette_normal_restore_mode');
+        const restoreField = uiRoot.querySelector('#swipe_roulette_normal_restore_field');
+        if (!normalRoutingInput || !restoreModeInput || !restoreField) return;
+
+        const enabled = normalRoutingInput.checked;
+        restoreModeInput.disabled = !enabled;
+        restoreField.classList.toggle('swipe-roulette__field--disabled', !enabled);
+    }
+
     function renderProfilesChecklist(container, stateEl) {
         if (!container || !stateEl) return;
 
@@ -678,7 +884,7 @@
         }
 
         container.style.display = '';
-        stateEl.textContent = 'Select profiles for weighted random rotation. Adjust weights per profile.';
+        stateEl.textContent = 'Select profiles for weighted routing. The same weights are used for swipes, user messages, and Spin.';
         stateEl.classList.add('swipe-roulette__state--ok');
 
         const fragment = document.createDocumentFragment();
@@ -762,6 +968,8 @@
         const settings = getSettings();
 
         const enabledInput = root.querySelector('#swipe_roulette_enabled');
+        const normalRoutingInput = root.querySelector('#swipe_roulette_normal_enabled');
+        const normalRestoreModeInput = root.querySelector('#swipe_roulette_normal_restore_mode');
         const thresholdInput = root.querySelector('#swipe_roulette_threshold');
         const profilesContainer = root.querySelector('#swipe_roulette_profiles');
         const stateEl = root.querySelector('#swipe_roulette_profiles_state');
@@ -769,8 +977,11 @@
         const notificationsInput = root.querySelector('#swipe_roulette_show_notifications');
 
         if (enabledInput) enabledInput.checked = settings.enabled;
+        if (normalRoutingInput) normalRoutingInput.checked = settings.normalMessageRoutingEnabled;
+        if (normalRestoreModeInput) normalRestoreModeInput.value = getNormalRestoreMode();
         if (thresholdInput) thresholdInput.value = String(getThreshold());
         if (notificationsInput) notificationsInput.checked = settings.showNotifications;
+        refreshNormalRestoreModeUi();
         renderProfilesChecklist(profilesContainer, stateEl);
 
         const spinBtn = root.querySelector('#swipe_roulette_spin');

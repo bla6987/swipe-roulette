@@ -25,8 +25,16 @@
     gap: 4px;
 }
 
+.swipe-roulette__field--disabled {
+    opacity: 0.65;
+}
+
 .swipe-roulette__label {
     font-size: 0.95em;
+}
+
+.swipe-roulette__select {
+    width: min(100%, 320px);
 }
 
 .swipe-roulette__hint {
