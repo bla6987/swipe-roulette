@@ -799,20 +799,6 @@
     function bindUiEvents() {
         if (!uiRoot) return;
 
-        const drawerToggle = uiRoot.querySelector('.inline-drawer-toggle');
-        if (drawerToggle) {
-            drawerToggle.addEventListener('click', () => {
-                const icon = uiRoot.querySelector('.inline-drawer-icon');
-                const content = uiRoot.querySelector('.inline-drawer-content');
-                const isOpen = content.style.display === 'block';
-                content.style.display = isOpen ? 'none' : 'block';
-                icon.classList.toggle('fa-circle-chevron-down', isOpen);
-                icon.classList.toggle('down', isOpen);
-                icon.classList.toggle('fa-circle-chevron-up', !isOpen);
-                icon.classList.toggle('up', !isOpen);
-            });
-        }
-
         const enabledInput = uiRoot.querySelector('#swipe_roulette_enabled');
         const normalRoutingInput = uiRoot.querySelector('#swipe_roulette_normal_enabled');
         const normalRestoreModeInput = uiRoot.querySelector('#swipe_roulette_normal_restore_mode');
