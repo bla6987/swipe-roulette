@@ -266,6 +266,11 @@
             return;
         }
 
+        if (target.id === getActiveProfileId()) {
+            log('Selected profile already active, skipping rotation', target.name);
+            return;
+        }
+
         rotationSeq++;
         if (!swipeRotationActive) {
             profileBeforeSwipe = getActiveProfileId();
