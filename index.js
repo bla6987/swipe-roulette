@@ -3,8 +3,9 @@
 
     const EXTENSION_NAME = 'swipe_roulette';
     const PROFILE_NONE_SENTINEL = '<None>';
-    const MAX_BOOT_RETRIES = 100;
-    const BOOT_RETRY_MS = 100;
+    const MAX_BOOT_RETRIES = 14;
+    const BOOT_RETRY_MS_INITIAL = 100;
+    const BOOT_RETRY_MS_MAX = 2000;
     const CHAT_COMPLETION_SIGNATURE_KEYS = [
         'chat_completion_source',
         'openai_model',
@@ -884,6 +885,16 @@
         const profiles = getConnectionProfiles().sort((a, b) => a.name.localeCompare(b.name));
         const selectedIds = new Set(settings.profileIds);
 
+        // Remove delegated listeners from a previous render before wiping innerHTML
+        if (container._srChangeHandler) {
+            container.removeEventListener('change', container._srChangeHandler);
+            container._srChangeHandler = null;
+        }
+        if (container._srInputHandler) {
+            container.removeEventListener('input', container._srInputHandler);
+            container._srInputHandler = null;
+        }
+
         container.innerHTML = '';
 
         if (profiles.length === 0) {
@@ -901,6 +912,7 @@
         for (const profile of profiles) {
             const row = document.createElement('div');
             row.className = 'swipe-roulette__profile-row';
+            row.dataset.profileId = profile.id;
 
             const label = document.createElement('label');
             label.className = 'checkbox_label flexNoGap swipe-roulette__profile-item';
@@ -911,23 +923,7 @@
             checkbox.type = 'checkbox';
             checkbox.checked = selectedIds.has(profile.id);
             checkbox.dataset.profileId = profile.id;
-            checkbox.addEventListener('change', () => {
-                const s = ensureSettings();
-                if (!s) return;
-
-                const set = new Set(s.profileIds);
-                if (checkbox.checked) set.add(profile.id);
-                else set.delete(profile.id);
-
-                s.profileIds = [...set];
-                saveSettings();
-
-                weightControls.style.display = checkbox.checked ? '' : 'none';
-                updateAllPercentageDisplays(container);
-
-                const spinBtn = uiRoot?.querySelector('#swipe_roulette_spin');
-                if (spinBtn) spinBtn.disabled = getSpinCandidates().length === 0;
-            });
+            checkbox.className = 'swipe-roulette__profile-checkbox';
 
             const text = document.createElement('span');
             text.className = 'swipe-roulette__profile-name';
@@ -946,14 +942,7 @@
             weightSlider.max = '10';
             weightSlider.className = 'swipe-roulette__weight-slider';
             weightSlider.value = String(getWeightForProfileId(profile.id));
-            weightSlider.addEventListener('input', () => {
-                const s = ensureSettings();
-                if (!s) return;
-
-                s.profileWeights[profile.id] = normalizeWeight(weightSlider.value);
-                saveSettings();
-                updateAllPercentageDisplays(container);
-            });
+            weightSlider.dataset.profileId = profile.id;
 
             const weightPct = document.createElement('span');
             weightPct.className = 'swipe-roulette__weight-pct';
@@ -968,6 +957,52 @@
         }
 
         container.appendChild(fragment);
+
+        // Single delegated listener for checkbox changes
+        container._srChangeHandler = (e) => {
+            const checkbox = e.target.closest('.swipe-roulette__profile-checkbox');
+            if (!checkbox) return;
+
+            const profileId = checkbox.dataset.profileId;
+            if (!profileId) return;
+
+            const s = ensureSettings();
+            if (!s) return;
+
+            const set = new Set(s.profileIds);
+            if (checkbox.checked) set.add(profileId);
+            else set.delete(profileId);
+            s.profileIds = [...set];
+            saveSettings();
+
+            const row = checkbox.closest('.swipe-roulette__profile-row');
+            const weightControls = row?.querySelector('.swipe-roulette__weight-controls');
+            if (weightControls) weightControls.style.display = checkbox.checked ? '' : 'none';
+
+            updateAllPercentageDisplays(container);
+
+            const spinBtn = uiRoot?.querySelector('#swipe_roulette_spin');
+            if (spinBtn) spinBtn.disabled = getSpinCandidates().length === 0;
+        };
+        container.addEventListener('change', container._srChangeHandler);
+
+        // Single delegated listener for slider input
+        container._srInputHandler = (e) => {
+            const slider = e.target.closest('.swipe-roulette__weight-slider');
+            if (!slider) return;
+
+            const profileId = slider.dataset.profileId;
+            if (!profileId) return;
+
+            const s = ensureSettings();
+            if (!s) return;
+
+            s.profileWeights[profileId] = normalizeWeight(slider.value);
+            saveSettings();
+            updateAllPercentageDisplays(container);
+        };
+        container.addEventListener('input', container._srInputHandler);
+
         updateAllPercentageDisplays(container);
     }
 
@@ -1054,7 +1089,8 @@
         const eventTypes = getEventTypes(ctx);
         if (!ctx?.eventSource || !eventTypes) {
             if (retries < MAX_BOOT_RETRIES) {
-                setTimeout(() => boot(retries + 1), BOOT_RETRY_MS);
+                const delay = Math.min(BOOT_RETRY_MS_INITIAL * Math.pow(2, retries), BOOT_RETRY_MS_MAX);
+                setTimeout(() => boot(retries + 1), delay);
             } else {
                 warn('Failed to initialize: SillyTavern context did not become available');
             }
