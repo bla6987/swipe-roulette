@@ -75,6 +75,7 @@
     let expectedProfileId = null;
     let connectionSignature = null;
     let internalProfileSwitchDepth = 0;
+    let pendingManualSwipeBypass = false;
 
     let uiRoot = null;
 
@@ -490,6 +491,12 @@
         if (type === 'swipe' && contextChanged) {
             return;
         }
+        if (type === 'swipe' && pendingManualSwipeBypass) {
+            pendingManualSwipeBypass = false;
+            defaultSwipesUsed = 0;
+            log('Skipping swipe rotation after manual connection change');
+            return;
+        }
 
         // Restore stale rotation from a previous generation that never completed
         if (swipeRotationActive && !isRestoringSwipe && type !== 'quiet') {
@@ -635,6 +642,7 @@
         resetSwipeCounters();
         resetSwipeState();
         resetNormalRoutingState();
+        pendingManualSwipeBypass = false;
         captureConnectionContext('chat_changed');
     }
 
@@ -685,7 +693,11 @@
     }
 
     function onConnectionContextSignal(eventKey) {
-        syncConnectionContext(`event:${eventKey}`);
+        const changed = syncConnectionContext(`event:${eventKey}`);
+        if (changed) {
+            pendingManualSwipeBypass = true;
+            log('Armed one-swipe bypass after manual connection context change', { eventKey });
+        }
     }
 
     function sanitizeThresholdInput(value) {
