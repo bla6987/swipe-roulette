@@ -53,6 +53,13 @@
         'generic_model',
         'api_server_textgenerationwebui',
     ];
+    const DYNAMIC_SIGNATURE_KEY_PATTERNS = [
+        /(^|_)model$/i,
+        /(^|_)source$/i,
+        /(^|_)preset$/i,
+        /(^|_)url$/i,
+        /^api_server_/i,
+    ];
 
     let defaultSwipesUsed = 0;
     let swipeRotationActive = false;
@@ -206,14 +213,22 @@
         return '{' + props.join(',') + '}';
     }
 
-    function pickKeys(source, keys) {
+    function isDynamicSignatureKey(key) {
+        if (typeof key !== 'string' || key.length === 0) return false;
+        return DYNAMIC_SIGNATURE_KEY_PATTERNS.some((pattern) => pattern.test(key));
+    }
+
+    function pickKeys(source, keys, { includeDynamicKeys = false } = {}) {
         if (!source || typeof source !== 'object') return {};
         const out = {};
-        for (const key of keys) {
-            if (typeof source[key] !== 'undefined') {
-                out[key] = source[key];
-            }
+        const allowList = new Set(Array.isArray(keys) ? keys : []);
+
+        for (const key of Object.keys(source)) {
+            if (!allowList.has(key) && !(includeDynamicKeys && isDynamicSignatureKey(key))) continue;
+            if (typeof source[key] === 'undefined') continue;
+            out[key] = source[key];
         }
+
         return out;
     }
 
@@ -234,8 +249,8 @@
             mainApi: ctx?.mainApi || null,
             selectedProfileId: activeProfileId,
             selectedProfile: getActiveProfileSnapshot(activeProfileId),
-            chatCompletion: pickKeys(ctx?.chatCompletionSettings, CHAT_COMPLETION_SIGNATURE_KEYS),
-            textCompletion: pickKeys(ctx?.textCompletionSettings, TEXT_COMPLETION_SIGNATURE_KEYS),
+            chatCompletion: pickKeys(ctx?.chatCompletionSettings, CHAT_COMPLETION_SIGNATURE_KEYS, { includeDynamicKeys: true }),
+            textCompletion: pickKeys(ctx?.textCompletionSettings, TEXT_COMPLETION_SIGNATURE_KEYS, { includeDynamicKeys: true }),
         };
 
         return stableStringify(snapshot);
