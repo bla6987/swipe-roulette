@@ -64,10 +64,12 @@
     let defaultSwipesUsed = 0;
     let swipeRotationActive = false;
     let profileBeforeSwipe = null;
+    let connectionContextBeforeSwipe = null;
     let isRestoringSwipe = false;
     let rotationSeq = 0;
     let normalRoutingActive = false;
     let profileBeforeNormalRouting = null;
+    let connectionContextBeforeNormalRouting = null;
     let isRestoringNormalRouting = false;
     let normalRoutingSeq = 0;
     let spinInFlight = false;
@@ -76,6 +78,7 @@
     let connectionSignature = null;
     let internalProfileSwitchDepth = 0;
     let pendingManualSwipeBypass = false;
+    let lastOverallChanceGateSignature = null;
 
     let uiRoot = null;
 
@@ -116,6 +119,10 @@
         if (settings.normalMessageRestoreMode !== 'restore' && settings.normalMessageRestoreMode !== 'keep') {
             settings.normalMessageRestoreMode = 'keep';
         }
+        if (typeof settings.overallChanceEnabled !== 'boolean') settings.overallChanceEnabled = false;
+        if (!Number.isFinite(Number(settings.overallChancePercent))) settings.overallChancePercent = 100;
+        settings.overallChancePercent = sanitizePercentageInput(settings.overallChancePercent);
+        if (typeof settings.overallChanceOnlyOnModelChange !== 'boolean') settings.overallChanceOnlyOnModelChange = false;
 
         return settings;
     }
@@ -138,6 +145,9 @@
             showNotifications: true,
             normalMessageRoutingEnabled: false,
             normalMessageRestoreMode: 'keep',
+            overallChanceEnabled: false,
+            overallChancePercent: 100,
+            overallChanceOnlyOnModelChange: false,
         };
     }
 
@@ -147,6 +157,18 @@
 
     function isNormalMessageRoutingEnabled() {
         return Boolean(getSettings().normalMessageRoutingEnabled);
+    }
+
+    function isOverallChanceEnabled() {
+        return Boolean(getSettings().overallChanceEnabled);
+    }
+
+    function getOverallChancePercent() {
+        return sanitizePercentageInput(getSettings().overallChancePercent);
+    }
+
+    function isOverallChanceOnlyOnModelChange() {
+        return Boolean(getSettings().overallChanceOnlyOnModelChange);
     }
 
     function getThreshold() {
@@ -233,6 +255,241 @@
         return out;
     }
 
+    function cloneValue(value) {
+        if (typeof value === 'undefined') return value;
+        if (typeof globalThis.structuredClone === 'function') {
+            try {
+                return globalThis.structuredClone(value);
+            } catch (_error) {
+                // Fall back to JSON clone for plain settings data.
+            }
+        }
+
+        try {
+            return JSON.parse(JSON.stringify(value));
+        } catch (_error) {
+            return value;
+        }
+    }
+
+    function copyObjectValues(source) {
+        if (!source || typeof source !== 'object') return {};
+        const out = {};
+        for (const key of Object.keys(source)) {
+            out[key] = cloneValue(source[key]);
+        }
+        return out;
+    }
+
+    function areEqualValues(left, right) {
+        if (Object.is(left, right)) return true;
+
+        const leftIsObject = left !== null && typeof left === 'object';
+        const rightIsObject = right !== null && typeof right === 'object';
+        if (!leftIsObject || !rightIsObject) return false;
+
+        return stableStringify(left) === stableStringify(right);
+    }
+
+    function captureRestorableConnectionContext(reason = 'capture_restorable_context', { silent = false } = {}) {
+        const ctx = getContext();
+        if (!ctx) return null;
+
+        const snapshot = {
+            profileId: getActiveProfileId(),
+            mainApi: cloneValue(ctx?.mainApi ?? null),
+            chatCompletion: copyObjectValues(
+                pickKeys(ctx?.chatCompletionSettings, CHAT_COMPLETION_SIGNATURE_KEYS, { includeDynamicKeys: true }),
+            ),
+            textCompletion: copyObjectValues(
+                pickKeys(ctx?.textCompletionSettings, TEXT_COMPLETION_SIGNATURE_KEYS, { includeDynamicKeys: true }),
+            ),
+        };
+
+        if (!silent) {
+            log('Captured restorable connection context', {
+                reason,
+                profileId: snapshot.profileId,
+                mainApi: snapshot.mainApi,
+            });
+        }
+
+        return snapshot;
+    }
+
+    function getTrackedSubsetKeys(target, snapshotSubset, staticKeys) {
+        const keys = new Set(Array.isArray(staticKeys) ? staticKeys : []);
+        const objectsToScan = [target, snapshotSubset];
+
+        for (const obj of objectsToScan) {
+            if (!obj || typeof obj !== 'object') continue;
+            for (const key of Object.keys(obj)) {
+                if (isDynamicSignatureKey(key)) keys.add(key);
+            }
+        }
+
+        return keys;
+    }
+
+    function applyTrackedSubset(target, snapshotSubset, staticKeys) {
+        if (!target || typeof target !== 'object') return { changed: false, targetMissing: true };
+        const source = snapshotSubset && typeof snapshotSubset === 'object' ? snapshotSubset : {};
+        const trackedKeys = getTrackedSubsetKeys(target, source, staticKeys);
+
+        let changed = false;
+        for (const key of trackedKeys) {
+            const hasSavedValue = Object.prototype.hasOwnProperty.call(source, key);
+
+            if (hasSavedValue) {
+                const nextValue = cloneValue(source[key]);
+                if (!areEqualValues(target[key], nextValue)) {
+                    target[key] = nextValue;
+                    changed = true;
+                }
+                continue;
+            }
+
+            if (Object.prototype.hasOwnProperty.call(target, key)) {
+                delete target[key];
+                changed = true;
+            }
+        }
+
+        return { changed, targetMissing: false };
+    }
+
+    function isTrackedSubsetMatch(currentSubset, savedSubset, staticKeys) {
+        const current = currentSubset && typeof currentSubset === 'object' ? currentSubset : {};
+        const saved = savedSubset && typeof savedSubset === 'object' ? savedSubset : {};
+        const trackedKeys = getTrackedSubsetKeys(current, saved, staticKeys);
+
+        for (const key of trackedKeys) {
+            const currentHas = Object.prototype.hasOwnProperty.call(current, key);
+            const savedHas = Object.prototype.hasOwnProperty.call(saved, key);
+
+            if (currentHas !== savedHas) return false;
+            if (!currentHas) continue;
+            if (!areEqualValues(current[key], saved[key])) return false;
+        }
+
+        return true;
+    }
+
+    function isRestorableConnectionContextMatch(savedSnapshot) {
+        if (!savedSnapshot || typeof savedSnapshot !== 'object') return true;
+        const current = captureRestorableConnectionContext('verify_restorable_context', { silent: true });
+        if (!current) return false;
+
+        if (!areEqualValues(current.mainApi ?? null, savedSnapshot.mainApi ?? null)) return false;
+        if (!isTrackedSubsetMatch(current.chatCompletion, savedSnapshot.chatCompletion, CHAT_COMPLETION_SIGNATURE_KEYS)) {
+            return false;
+        }
+        if (!isTrackedSubsetMatch(current.textCompletion, savedSnapshot.textCompletion, TEXT_COMPLETION_SIGNATURE_KEYS)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    function applyRestorableSnapshotToContext(ctx, snapshot) {
+        let changed = false;
+        let complete = true;
+
+        const savedMainApi = snapshot.mainApi ?? null;
+        if (!areEqualValues(ctx.mainApi ?? null, savedMainApi)) {
+            ctx.mainApi = cloneValue(savedMainApi);
+            changed = true;
+        }
+
+        const chatResult = applyTrackedSubset(
+            ctx.chatCompletionSettings,
+            snapshot.chatCompletion,
+            CHAT_COMPLETION_SIGNATURE_KEYS,
+        );
+        if (chatResult.targetMissing) {
+            complete = false;
+            warn('Unable to restore chat completion settings: target unavailable');
+        } else {
+            changed = changed || chatResult.changed;
+        }
+
+        const textResult = applyTrackedSubset(
+            ctx.textCompletionSettings,
+            snapshot.textCompletion,
+            TEXT_COMPLETION_SIGNATURE_KEYS,
+        );
+        if (textResult.targetMissing) {
+            complete = false;
+            warn('Unable to restore text completion settings: target unavailable');
+        } else {
+            changed = changed || textResult.changed;
+        }
+
+        return { changed, complete };
+    }
+
+    async function applyRestorableConnectionContext(savedSnapshot, reason = 'restore_connection_context') {
+        if (!savedSnapshot || typeof savedSnapshot !== 'object') return true;
+
+        const ctx = getContext();
+        if (!ctx) {
+            warn('Unable to restore connection context: SillyTavern context unavailable');
+            return false;
+        }
+
+        const fallbackSnapshot = captureRestorableConnectionContext('capture_restore_fallback', { silent: true });
+        let complete = true;
+        internalProfileSwitchDepth += 1;
+
+        try {
+            const applyResult = applyRestorableSnapshotToContext(ctx, savedSnapshot);
+            const changed = applyResult.changed;
+            complete = complete && applyResult.complete;
+
+            if (changed) {
+                saveSettings();
+                log('Applied restorable connection context', {
+                    reason,
+                    profileId: savedSnapshot.profileId ?? null,
+                    mainApi: savedSnapshot.mainApi ?? null,
+                });
+            } else {
+                log('Restorable connection context already matched', {
+                    reason,
+                    profileId: savedSnapshot.profileId ?? null,
+                });
+            }
+        } catch (error) {
+            complete = false;
+            warn('Failed to apply restorable connection context', error);
+        } finally {
+            internalProfileSwitchDepth = Math.max(0, internalProfileSwitchDepth - 1);
+            captureConnectionContext(reason);
+        }
+
+        if (!isRestorableConnectionContextMatch(savedSnapshot)) {
+            complete = false;
+            warn('Unable to fully restore saved model/provider context; restoring previous active context instead');
+
+            if (fallbackSnapshot) {
+                internalProfileSwitchDepth += 1;
+                try {
+                    const rollbackResult = applyRestorableSnapshotToContext(ctx, fallbackSnapshot);
+                    if (rollbackResult.changed) {
+                        saveSettings();
+                    }
+                } catch (error) {
+                    warn('Failed to restore previous active context after restore mismatch', error);
+                } finally {
+                    internalProfileSwitchDepth = Math.max(0, internalProfileSwitchDepth - 1);
+                    captureConnectionContext(`${reason}:rollback`);
+                }
+            }
+        }
+
+        return complete;
+    }
+
     function getActiveProfileSnapshot(activeProfileId) {
         if (!activeProfileId) return null;
         const ctx = getContext();
@@ -263,6 +520,12 @@
         log('Captured connection context', { reason, expectedProfileId });
     }
 
+    function resetOverallChanceGateSignature(reason = 'reset') {
+        if (lastOverallChanceGateSignature === null) return;
+        lastOverallChanceGateSignature = null;
+        log('Reset overall chance gate signature', { reason });
+    }
+
     function syncConnectionContext(reason, options = {}) {
         const { resetCounter = true, cancelActiveRotation = true } = options;
         if (isInternalProfileSwitchInProgress()) {
@@ -286,6 +549,7 @@
 
         expectedProfileId = currentProfileId;
         connectionSignature = nextSignature;
+        resetOverallChanceGateSignature(`connection_context_changed:${reason}`);
 
         if (resetCounter) {
             defaultSwipesUsed = 0;
@@ -301,6 +565,29 @@
         }
 
         return true;
+    }
+
+    function shouldSkipSwipeRotationByOverallChance() {
+        if (!isOverallChanceEnabled()) return false;
+
+        const currentSignature = computeConnectionSignature();
+        const modelChangeOnly = isOverallChanceOnlyOnModelChange();
+        if (modelChangeOnly && typeof lastOverallChanceGateSignature === 'string' && currentSignature === lastOverallChanceGateSignature) {
+            log('Skipping overall chance gate check: signature unchanged');
+            return false;
+        }
+
+        lastOverallChanceGateSignature = currentSignature;
+        const percent = getOverallChancePercent();
+        const roll = Math.random() * 100;
+        const passes = roll < percent;
+        log('Overall chance gate roll', {
+            percent,
+            roll: Number(roll.toFixed(2)),
+            passes,
+            modelChangeOnly,
+        });
+        return !passes;
     }
 
     function quoteSlashArg(value) {
@@ -407,6 +694,7 @@
         rotationSeq++;
         swipeRotationActive = false;
         profileBeforeSwipe = null;
+        connectionContextBeforeSwipe = null;
         isRestoringSwipe = false;
         dismissRotationToast();
     }
@@ -415,6 +703,7 @@
         normalRoutingSeq++;
         normalRoutingActive = false;
         profileBeforeNormalRouting = null;
+        connectionContextBeforeNormalRouting = null;
         isRestoringNormalRouting = false;
         dismissRotationToast();
     }
@@ -425,6 +714,7 @@
 
         const seq = rotationSeq;
         const savedProfileId = profileBeforeSwipe;
+        const savedContext = connectionContextBeforeSwipe;
         const profiles = getConnectionProfiles();
         const originalProfile = profiles.find(p => p.id === savedProfileId) || null;
 
@@ -436,6 +726,12 @@
                 await performInternalProfileSwitch(PROFILE_NONE_SENTINEL, 'restore_none');
                 log('Restored to no profile');
             }
+
+            const contextRestored = await applyRestorableConnectionContext(savedContext, 'restore_swipe_context');
+            if (!contextRestored) {
+                warn('Swipe restore could not fully restore saved model/provider context');
+            }
+
             dismissRotationToast();
         } catch (error) {
             warn('Failed to restore profile after swipe generation', error);
@@ -443,6 +739,7 @@
             if (rotationSeq === seq) {
                 swipeRotationActive = false;
                 profileBeforeSwipe = null;
+                connectionContextBeforeSwipe = null;
             } else {
                 log('Skipping stale restore cleanup', { seq, current: rotationSeq });
             }
@@ -456,6 +753,7 @@
 
         const seq = normalRoutingSeq;
         const savedProfileId = profileBeforeNormalRouting;
+        const savedContext = connectionContextBeforeNormalRouting;
         const profiles = getConnectionProfiles();
         const originalProfile = profiles.find(p => p.id === savedProfileId) || null;
 
@@ -467,6 +765,12 @@
                 await performInternalProfileSwitch(PROFILE_NONE_SENTINEL, 'restore_normal_none');
                 log('Restored to no profile after normal message generation');
             }
+
+            const contextRestored = await applyRestorableConnectionContext(savedContext, 'restore_normal_context');
+            if (!contextRestored) {
+                warn('Normal restore could not fully restore saved model/provider context');
+            }
+
             dismissRotationToast();
         } catch (error) {
             warn('Failed to restore profile after normal message generation', error);
@@ -474,6 +778,7 @@
             if (normalRoutingSeq === seq) {
                 normalRoutingActive = false;
                 profileBeforeNormalRouting = null;
+                connectionContextBeforeNormalRouting = null;
             } else {
                 log('Skipping stale normal restore cleanup', { seq, current: normalRoutingSeq });
             }
@@ -545,10 +850,12 @@
                 normalRoutingSeq++;
                 if (!normalRoutingActive) {
                     profileBeforeNormalRouting = activeProfileId;
+                    connectionContextBeforeNormalRouting = captureRestorableConnectionContext('capture_before_normal_switch');
                 }
             } else {
                 normalRoutingActive = false;
                 profileBeforeNormalRouting = null;
+                connectionContextBeforeNormalRouting = null;
                 isRestoringNormalRouting = false;
             }
 
@@ -566,6 +873,7 @@
                 if (restoreAfter) {
                     normalRoutingActive = false;
                     profileBeforeNormalRouting = null;
+                    connectionContextBeforeNormalRouting = null;
                 }
             }
 
@@ -578,6 +886,11 @@
         const threshold = getThreshold();
         if (defaultSwipesUsed <= threshold) {
             log('Swipe within threshold, skipping rotation', { defaultSwipesUsed, threshold });
+            return;
+        }
+
+        if (shouldSkipSwipeRotationByOverallChance()) {
+            log('Swipe rotation blocked by overall chance gate');
             return;
         }
 
@@ -601,6 +914,7 @@
         rotationSeq++;
         if (!swipeRotationActive) {
             profileBeforeSwipe = getActiveProfileId();
+            connectionContextBeforeSwipe = captureRestorableConnectionContext('capture_before_swipe_switch');
         }
 
         try {
@@ -612,6 +926,7 @@
             warn('Failed to switch profile for swipe generation', error);
             swipeRotationActive = false;
             profileBeforeSwipe = null;
+            connectionContextBeforeSwipe = null;
         }
     }
 
@@ -643,6 +958,7 @@
         resetSwipeState();
         resetNormalRoutingState();
         pendingManualSwipeBypass = false;
+        resetOverallChanceGateSignature('chat_changed');
         captureConnectionContext('chat_changed');
     }
 
@@ -704,6 +1020,12 @@
         const n = Number(value);
         if (!Number.isFinite(n)) return 0;
         return Math.max(0, Math.floor(n));
+    }
+
+    function sanitizePercentageInput(value) {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return 0;
+        return Math.max(0, Math.min(100, Math.floor(n)));
     }
 
     function normalizeNormalRestoreMode(value) {
@@ -786,6 +1108,21 @@
                             Number of swipe generations to keep on the current profile before rotation starts. 0 means rotate on the first swipe.
                         </div>
                         <label class="checkbox_label flexNoGap swipe-roulette__toggle">
+                            <input type="checkbox" id="swipe_roulette_overall_chance_enabled">
+                            <span>Enable overall chance gate for swipe rotation</span>
+                        </label>
+                        <label class="swipe-roulette__field" id="swipe_roulette_overall_chance_percent_field" for="swipe_roulette_overall_chance_percent">
+                            <span class="swipe-roulette__label">Overall chance (%)</span>
+                            <input type="number" id="swipe_roulette_overall_chance_percent" min="0" max="100" step="1" class="text_pole widthNatural">
+                        </label>
+                        <label class="checkbox_label flexNoGap swipe-roulette__toggle" id="swipe_roulette_overall_chance_model_change_only_field">
+                            <input type="checkbox" id="swipe_roulette_overall_chance_model_change_only">
+                            <span>Apply only when model/config changes</span>
+                        </label>
+                        <div class="swipe-roulette__hint">
+                            Overall chance gate runs after threshold. With model/config-only enabled, the random roll is re-checked only after connection signature changes.
+                        </div>
+                        <label class="checkbox_label flexNoGap swipe-roulette__toggle">
                             <input type="checkbox" id="swipe_roulette_normal_enabled">
                             <span>Enable weighted routing for user messages</span>
                         </label>
@@ -831,6 +1168,9 @@
         const normalRoutingInput = uiRoot.querySelector('#swipe_roulette_normal_enabled');
         const normalRestoreModeInput = uiRoot.querySelector('#swipe_roulette_normal_restore_mode');
         const thresholdInput = uiRoot.querySelector('#swipe_roulette_threshold');
+        const overallChanceEnabledInput = uiRoot.querySelector('#swipe_roulette_overall_chance_enabled');
+        const overallChancePercentInput = uiRoot.querySelector('#swipe_roulette_overall_chance_percent');
+        const overallChanceModelChangeOnlyInput = uiRoot.querySelector('#swipe_roulette_overall_chance_model_change_only');
 
         if (enabledInput) {
             enabledInput.addEventListener('change', () => {
@@ -875,6 +1215,41 @@
             });
         }
 
+        if (overallChanceEnabledInput) {
+            overallChanceEnabledInput.addEventListener('change', () => {
+                const settings = ensureSettings();
+                if (!settings) return;
+
+                settings.overallChanceEnabled = overallChanceEnabledInput.checked;
+                resetOverallChanceGateSignature('settings:overall_chance_enabled');
+                saveSettings();
+                refreshOverallChanceUi();
+            });
+        }
+
+        if (overallChancePercentInput) {
+            overallChancePercentInput.addEventListener('input', () => {
+                const settings = ensureSettings();
+                if (!settings) return;
+
+                settings.overallChancePercent = sanitizePercentageInput(overallChancePercentInput.value);
+                overallChancePercentInput.value = String(settings.overallChancePercent);
+                saveSettings();
+            });
+        }
+
+        if (overallChanceModelChangeOnlyInput) {
+            overallChanceModelChangeOnlyInput.addEventListener('change', () => {
+                const settings = ensureSettings();
+                if (!settings) return;
+
+                settings.overallChanceOnlyOnModelChange = overallChanceModelChangeOnlyInput.checked;
+                resetOverallChanceGateSignature('settings:overall_chance_model_only');
+                saveSettings();
+                refreshOverallChanceUi();
+            });
+        }
+
         const notificationsInput = uiRoot.querySelector('#swipe_roulette_show_notifications');
         if (notificationsInput) {
             notificationsInput.addEventListener('change', () => {
@@ -902,6 +1277,22 @@
         const enabled = normalRoutingInput.checked;
         restoreModeInput.disabled = !enabled;
         restoreField.classList.toggle('swipe-roulette__field--disabled', !enabled);
+    }
+
+    function refreshOverallChanceUi() {
+        if (!uiRoot) return;
+        const enabledInput = uiRoot.querySelector('#swipe_roulette_overall_chance_enabled');
+        const percentInput = uiRoot.querySelector('#swipe_roulette_overall_chance_percent');
+        const percentField = uiRoot.querySelector('#swipe_roulette_overall_chance_percent_field');
+        const modelChangeOnlyInput = uiRoot.querySelector('#swipe_roulette_overall_chance_model_change_only');
+        const modelChangeOnlyField = uiRoot.querySelector('#swipe_roulette_overall_chance_model_change_only_field');
+        if (!enabledInput || !percentInput || !percentField || !modelChangeOnlyInput || !modelChangeOnlyField) return;
+
+        const enabled = enabledInput.checked;
+        percentInput.disabled = !enabled;
+        modelChangeOnlyInput.disabled = !enabled;
+        percentField.classList.toggle('swipe-roulette__field--disabled', !enabled);
+        modelChangeOnlyField.classList.toggle('swipe-roulette__field--disabled', !enabled);
     }
 
     function renderProfilesChecklist(container, stateEl) {
@@ -1043,6 +1434,9 @@
         const normalRoutingInput = root.querySelector('#swipe_roulette_normal_enabled');
         const normalRestoreModeInput = root.querySelector('#swipe_roulette_normal_restore_mode');
         const thresholdInput = root.querySelector('#swipe_roulette_threshold');
+        const overallChanceEnabledInput = root.querySelector('#swipe_roulette_overall_chance_enabled');
+        const overallChancePercentInput = root.querySelector('#swipe_roulette_overall_chance_percent');
+        const overallChanceModelChangeOnlyInput = root.querySelector('#swipe_roulette_overall_chance_model_change_only');
         const profilesContainer = root.querySelector('#swipe_roulette_profiles');
         const stateEl = root.querySelector('#swipe_roulette_profiles_state');
 
@@ -1052,7 +1446,11 @@
         if (normalRoutingInput) normalRoutingInput.checked = settings.normalMessageRoutingEnabled;
         if (normalRestoreModeInput) normalRestoreModeInput.value = getNormalRestoreMode();
         if (thresholdInput) thresholdInput.value = String(getThreshold());
+        if (overallChanceEnabledInput) overallChanceEnabledInput.checked = isOverallChanceEnabled();
+        if (overallChancePercentInput) overallChancePercentInput.value = String(getOverallChancePercent());
+        if (overallChanceModelChangeOnlyInput) overallChanceModelChangeOnlyInput.checked = isOverallChanceOnlyOnModelChange();
         if (notificationsInput) notificationsInput.checked = settings.showNotifications;
+        refreshOverallChanceUi();
         refreshNormalRestoreModeUi();
         renderProfilesChecklist(profilesContainer, stateEl);
 
