@@ -1525,5 +1525,21 @@
         init();
     }
 
-    boot();
+    async function bootWithRuntimeBus() {
+        const runtimeBus = globalThis.STRuntimeBus;
+        if (!runtimeBus?.waitForContext) {
+            boot();
+            return;
+        }
+
+        try {
+            await runtimeBus.waitForContext({ timeoutMs: 10000 });
+            init();
+        } catch (error) {
+            warn('Runtime bus context wait failed; falling back to local boot', error);
+            boot();
+        }
+    }
+
+    bootWithRuntimeBus();
 })();
