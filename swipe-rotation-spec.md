@@ -1,5 +1,20 @@
 # Swipe Profile Rotation — Implementation Spec
 
+## Status — historical specification, reviewed 2026-10-12
+
+The original lifecycle feature is implemented: generation-event interception, profile switching, threshold counters, completion/abort restoration, chat resets and Connection Manager UI integration.
+
+- [x] Original swipe-generation routing and temporary restoration.
+- [x] Manual connection-context changes reset the baseline.
+- [x] Profile checklist refreshes and stale selections are pruned.
+- [x] Round-robin selection has been **superseded** by weighted random selection and manual Spin. See `swipe_roulette_implementation_plan.md` for the current checklist.
+
+The sections “Cycling (Not Random)”, active-profile exclusion, rotation index and original example settings below are historical. Current automatic draws can select the active profile; weights are 1–10 with default 5. Normal-message routing is also available as an option. No separate round-robin implementation remains to be built.
+
+Remaining: live verification listed in the weighted plan. Use `README.md` and `index.js` as the current behavior reference.
+
+## Original specification
+
 A standalone SillyTavern extension that automatically cycles Connection Manager profiles on each swipe, so every alternative response comes from a different model/API configuration.
 
 ---

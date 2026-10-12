@@ -1,5 +1,32 @@
 # Swipe Roulette Weighted Random + Quick Spin Implementation Plan
 
+## Implementation status — reviewed 2026-10-12
+
+The seven implementation steps in this plan have code in the current extension. The original design below is retained as historical context; use this status section and `README.md` for current behavior.
+
+- [x] Settings bootstrap and migration: `ensureSettings()`, normalized weights and stale-profile pruning.
+- [x] Weighted random automatic draws: `weightedRandomDraw()` replaces the old round-robin cycle.
+- [x] Awaited pre-generation switching, threshold gates, restore handlers and stale-state recovery.
+- [x] Manual persistent Spin: `spinNow()`, status feedback and an in-flight guard.
+- [x] Per-profile weight controls and probability feedback.
+- [x] Empty-state/help text and disabled Spin when no candidates exist.
+- [x] README describes current weighted routing and restoration behavior.
+
+### Current behavior that supersedes the original proposal
+
+- Weights use **1–10 sliders**, default **5**, rather than the proposed 1–999 numeric inputs.
+- The active profile **is included** if selected, so a weighted draw can retain it; the proposal's automatic exclusion rule is obsolete.
+- Optional weighted routing for normal user-message generations and an optional overall swipe chance gate have also been implemented.
+- Temporary restoration captures provider/model/preset/URL context as well as the profile.
+- The older `swipe-rotation-spec.md` describes the original round-robin version and is superseded by the weighted implementation.
+
+### Remaining work
+
+- [ ] Run the functional scenarios below in a live SillyTavern instance, including abort, profile deletion, manual connection changes and optional normal-message routing. This review confirms source implementation, not a new live test.
+- **Deferred / outside this plan:** weight preset import/export and new slash commands. These were explicit non-goals, not unfinished requirements.
+
+## Historical design
+
 ## Summary
 
 This plan extends the existing `swipe_roulette` extension in `/workspace/swipe_roulette` to match the feature set previously associated with SwipeModelRoulette while preserving the current stable behavior:
